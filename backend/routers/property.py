@@ -3,12 +3,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import httpx
 from flask import Blueprint, request, jsonify
 
-property_bp = Blueprint("property", __name__)
-ATTOM_KEY  = os.getenv("ATTOM_API_KEY", "")
-ATTOM_BASE = "https://api.gateway.attomdata.com/propertyapi/v1.0.0"
-NOMINATIM  = "https://nominatim.openstreetmap.org"
-HDR_ATTOM  = {"apikey": ATTOM_KEY, "Accept": "application/json"}
-HDR_NOM    = {"User-Agent": "HomeTrue/1.0 (homequeryapp@example.com)"}
+property_bp  = Blueprint("property", __name__)
+ATTOM_KEY    = os.getenv("ATTOM_API_KEY", "")
+MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN", "")
+ATTOM_BASE   = "https://api.gateway.attomdata.com/propertyapi/v1.0.0"
+NOMINATIM    = "https://nominatim.openstreetmap.org"
+HDR_ATTOM    = {"apikey": ATTOM_KEY, "Accept": "application/json"}
+HDR_NOM      = {"User-Agent": "HomeTrue/1.0 (homequeryapp@example.com)"}
 
 
 def _mock_detail(address, zip_code):

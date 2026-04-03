@@ -10,7 +10,7 @@ export default function SearchBar({ onSearch, loading }) {
   const [showDropdown, setShowDropdown] = useState(false);
   const [fetching, setFetching]         = useState(false);
   const [prefilling, setPrefilling]     = useState(false);
-  const [prefilled, setPrefilled]       = useState(null); // { beds, baths, sqft, price, assessed }
+  const [prefilled, setPrefilled]       = useState(null);
   const debounceRef = useRef(null);
   const wrapperRef  = useRef(null);
 
@@ -47,15 +47,15 @@ export default function SearchBar({ onSearch, loading }) {
       });
       if (data.found) {
         setPrefilled({
-          price:    data.avm_price    || null,
-          beds:     data.bedrooms     || null,
-          baths:    data.bathrooms    || null,
-          sqft:     data.sqft         || null,
+          price:    data.avm_price      || null,
+          beds:     data.bedrooms       || null,
+          baths:    data.bathrooms      || null,
+          sqft:     data.sqft           || null,
           assessed: data.assessed_value || null,
         });
       }
     } catch {
-      // silent
+      // silent — backend will use ATTOM as fallback
     } finally {
       setPrefilling(false);
     }
@@ -100,10 +100,10 @@ export default function SearchBar({ onSearch, loading }) {
       zip_code:     parsed.zip_code || "00000",
       lat:          parsed.lat      || null,
       lon:          parsed.lon      || null,
-      asking_price: prefilled?.price  || null,
-      bedrooms:     prefilled?.beds   || null,
-      bathrooms:    prefilled?.baths  || null,
-      sqft:         prefilled?.sqft   || null,
+      asking_price: prefilled?.price || null,
+      bedrooms:     prefilled?.beds  || null,
+      bathrooms:    prefilled?.baths || null,
+      sqft:         prefilled?.sqft  || null,
     });
   }
 
@@ -156,53 +156,42 @@ export default function SearchBar({ onSearch, loading }) {
           </button>
         </div>
 
-        {/* Dropdown */}
         {showDropdown && suggestions.length > 0 && (
           <ul className="absolute z-50 top-full mt-1 w-full bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden">
             {suggestions.map((s, i) => (
-              <li
-                key={i}
-                onClick={() => handleSelect(s)}
-                className="px-4 py-3 hover:bg-orange-50 cursor-pointer transition border-b border-gray-100 last:border-0"
-              >
-                <p className="text-sm text-gray-900 font-medium">
-                  {s.address || s.display_name.split(",")[0]}
-                </p>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  {s.city}, {s.state} {s.zip_code}
-                </p>
+              <li key={i} onClick={() => handleSelect(s)}
+                className="px-4 py-3 hover:bg-orange-50 cursor-pointer transition border-b border-gray-100 last:border-0">
+                <p className="text-sm text-gray-900 font-medium">{s.address || s.display_name.split(",")[0]}</p>
+                <p className="text-xs text-gray-500 mt-0.5">{s.city}, {s.state} {s.zip_code}</p>
               </li>
             ))}
           </ul>
         )}
       </div>
 
-      {/* Auto-fill status */}
       {prefilling && (
-        <p className="text-xs text-gray-500 text-center mt-1">
-          <span className="inline-flex items-center gap-1">
-            <svg className="animate-spin w-3 h-3 text-orange-400" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
-            </svg>
-            Fetching property details...
-          </span>
+        <p className="text-xs text-gray-500 text-center mt-1 flex items-center justify-center gap-1">
+          <svg className="animate-spin w-3 h-3 text-orange-400" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+          </svg>
+          Fetching property details automatically...
         </p>
       )}
 
       {prefilled && (
         <div className="mt-2 px-4 py-2.5 bg-orange-50 border border-orange-200 rounded-xl flex flex-wrap items-center gap-3 text-sm">
-          <span className="text-orange-600">
+          <span className="text-orange-600 font-medium">
             <svg className="w-4 h-4 inline mr-1" fill="currentColor" viewBox="0 0 20 20">
               <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
             </svg>
-            Property data auto-filled
+            Property details auto-fetched
           </span>
-          {prefilled.beds && <span className="text-gray-600">{prefilled.beds} bed</span>}
-          {prefilled.baths && <span className="text-gray-600">{prefilled.baths} bath</span>}
-          {prefilled.sqft && <span className="text-gray-600">{prefilled.sqft.toLocaleString()} sqft</span>}
-          {prefilled.price && <span className="text-gray-600">AVM: ${prefilled.price.toLocaleString()}</span>}
-          {prefilled.assessed && <span className="text-gray-600">Assessed: ${prefilled.assessed.toLocaleString()}</span>}
+          {prefilled.beds     && <span className="text-gray-600">{prefilled.beds} bed</span>}
+          {prefilled.baths    && <span className="text-gray-600">{prefilled.baths} bath</span>}
+          {prefilled.sqft     && <span className="text-gray-600">{prefilled.sqft.toLocaleString()} sqft</span>}
+          {prefilled.price    && <span className="text-gray-600">AVM ${prefilled.price.toLocaleString()}</span>}
+          {prefilled.assessed && <span className="text-gray-600">Assessed ${prefilled.assessed.toLocaleString()}</span>}
         </div>
       )}
     </form>
