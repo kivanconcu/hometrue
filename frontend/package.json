@@ -8,7 +8,8 @@
     "react-scripts": "5.0.1",
     "react-router-dom": "^6.23.1",
     "axios": "^1.7.2",
-    "recharts": "^2.12.7"
+    "recharts": "^2.12.7",
+    "serve": "^14.2.3"
   },
   "devDependencies": {
     "tailwindcss": "^3.4.4",
@@ -17,7 +18,8 @@
   },
   "scripts": {
     "start": "react-scripts start",
-    "build": "react-scripts build"
+    "build": "react-scripts build",
+    "serve": "serve -s build"
   },
   "browserslist": {
     "production": [">0.2%", "not dead", "not op_mini all"],
