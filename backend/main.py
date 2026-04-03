@@ -401,7 +401,10 @@ def analyze():
         neighborhood_income=neighborhood.get("median_income"),
     )
 
-    is_mock = prop.get("is_mock") or neighborhood.get("is_mock") or trends.get("is_mock")
+    # Only show "Mock Data" if we truly have no real data to work with.
+    # If the user supplied an asking price, the analysis is real regardless of ATTOM.
+    prop_is_mock = prop.get("is_mock") and not asking
+    is_mock = prop_is_mock or neighborhood.get("is_mock") or trends.get("is_mock")
 
     return jsonify({
         "property":               prop,

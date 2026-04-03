@@ -83,9 +83,11 @@ async def get_property_detail_sync(address, city, state, zip_code):
         return d
     try:
         async with httpx.AsyncClient(timeout=10) as client:
+            # ATTOM requires address1 (street) + address2 (city, state zip)
+            address2 = "{}, {} {}".format(city, state, zip_code).strip(", ")
             resp = await client.get(
                 "{}/property/detail".format(ATTOM_BASE),
-                params={"address1": address, "postalcode": zip_code},
+                params={"address1": address, "address2": address2},
                 headers=HDR_ATTOM,
             )
             if resp.status_code != 200:
