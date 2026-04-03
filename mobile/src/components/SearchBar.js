@@ -49,25 +49,25 @@ export default function SearchBar({ onSearch, loading }) {
     }
   }, []);
 
-  async function prefillFromZillow(addr) {
+  async function prefillFromRentcast(addr) {
     if (!addr.address) return;
     setFetchingZillow(true);
     setZestimate(null);
     try {
-      const { data } = await client.get("/api/property/zillow-lookup", {
+      const { data } = await client.get("/api/property/prefill", {
         params: {
-          address: addr.address,
-          city: addr.city,
-          state: addr.state,
+          address:  addr.address,
+          city:     addr.city,
+          state:    addr.state,
           zip_code: addr.zip_code,
         },
       });
       if (data.found) {
-        if (data.price) setPrice(String(data.price));
-        if (data.bedrooms) setBeds(String(data.bedrooms));
-        if (data.bathrooms) setBaths(String(data.bathrooms));
-        if (data.sqft) setSqft(String(data.sqft));
-        if (data.zestimate) setZestimate(data.zestimate);
+        if (data.avm_price)  setPrice(String(data.avm_price));
+        if (data.bedrooms)   setBeds(String(data.bedrooms));
+        if (data.bathrooms)  setBaths(String(data.bathrooms));
+        if (data.sqft)       setSqft(String(data.sqft));
+        if (data.assessed_value) setZestimate(data.assessed_value);
       }
     } catch {
       // silent
@@ -91,7 +91,7 @@ export default function SearchBar({ onSearch, loading }) {
     setShowDropdown(false);
     setSuggestions([]);
     Keyboard.dismiss();
-    prefillFromZillow(s);
+    prefillFromRentcast(s);
   }
 
   function parseManualAddress(raw) {
@@ -200,12 +200,12 @@ export default function SearchBar({ onSearch, loading }) {
             style={{ marginRight: 6 }}
           />
           <Text style={styles.zestimateText}>
-            Zillow Zestimate:{" "}
+            Assessed Value:{" "}
             <Text style={styles.zestimateValue}>
               ${zestimate.toLocaleString()}
             </Text>
             {"  "}
-            <Text style={styles.zestimateSub}>— form pre-filled</Text>
+            <Text style={styles.zestimateSub}>— pre-filled from RentCast</Text>
           </Text>
         </View>
       )}
