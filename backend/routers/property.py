@@ -1,6 +1,7 @@
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import httpx
+from urllib.parse import quote
 from flask import Blueprint, request, jsonify
 
 property_bp  = Blueprint("property", __name__)
@@ -34,7 +35,54 @@ def autocomplete():
     if len(q) < 4:
         return jsonify([])
 
-    async def _fetch():
+    # Use Mapbox if token available, otherwise fall back to Nominatim
+    if MAPBOX_TOKEN:
+        async def _fetch_mapbox():
+            async with httpx.AsyncClient(timeout=8) as client:
+                resp = await client.get(
+                    "https://api.mapbox.com/geocoding/v5/mapbox.places/{}.json".format(
+                        quote(q)
+                    ),
+                    params={
+                        "country":      "us",
+                        "types":        "address",
+                        "limit":        8,
+                        "proximity":    "ip",
+                        "access_token": MAPBOX_TOKEN,
+                    },
+                )
+                return resp.json() if resp.status_code == 200 else {}
+
+        try:
+            data = asyncio.run(_fetch_mapbox())
+        except Exception:
+            data = {}
+
+        suggestions = []
+        for feat in data.get("features", []):
+            ctx      = {c["id"].split(".")[0]: c["text"] for c in feat.get("context", [])}
+            postcode = ctx.get("postcode", "")
+            if not postcode:
+                continue
+            place_name = feat.get("place_name", "")
+            parts      = place_name.split(",")
+            street     = parts[0].strip() if parts else ""
+            city       = ctx.get("place", "")
+            state      = ctx.get("region", "")
+            coords     = feat.get("geometry", {}).get("coordinates", [None, None])
+            suggestions.append({
+                "display_name": place_name,
+                "address":      street,
+                "city":         city,
+                "state":        state,
+                "zip_code":     postcode,
+                "lat":          coords[1],
+                "lon":          coords[0],
+            })
+        return jsonify(suggestions)
+
+    # Fallback: Nominatim (OpenStreetMap)
+    async def _fetch_nom():
         async with httpx.AsyncClient(timeout=8) as client:
             resp = await client.get(
                 "{}/search".format(NOMINATIM),
@@ -45,7 +93,7 @@ def autocomplete():
             return resp.json() if resp.status_code == 200 else []
 
     try:
-        results = asyncio.run(_fetch())
+        results = asyncio.run(_fetch_nom())
     except Exception:
         return jsonify([])
 
@@ -60,12 +108,12 @@ def autocomplete():
         city  = addr.get("city") or addr.get("town") or addr.get("village") or ""
         suggestions.append({
             "display_name": r.get("display_name", ""),
-            "address": "{} {}".format(house, road).strip(),
-            "city": city,
-            "state": addr.get("state", ""),
-            "zip_code": zip_,
-            "lat": float(r.get("lat", 0)),
-            "lon": float(r.get("lon", 0)),
+            "address":      "{} {}".format(house, road).strip(),
+            "city":         city,
+            "state":        addr.get("state", ""),
+            "zip_code":     zip_,
+            "lat":          float(r.get("lat", 0)),
+            "lon":          float(r.get("lon", 0)),
         })
     return jsonify(suggestions)
 
