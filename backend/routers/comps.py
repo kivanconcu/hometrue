@@ -50,41 +50,60 @@ def get_comps_route():
 async def get_comps_sync(zip_code, bedrooms, bathrooms, sqft, asking_price):
     if not ATTOM_KEY:
         return _mock_comps(zip_code, bedrooms, sqft, asking_price)
-    start_date = (date.today() - timedelta(days=182)).strftime("%Y-%m-%d")
-    try:
-        async with httpx.AsyncClient(timeout=12) as client:
-            resp = await client.get(f"{ATTOM_BASE}/sale/snapshot",
-                params={"postalcode": zip_code, "startsalesearchdate": start_date, "pagesize": 50},
-                headers=HDR_ATTOM)
-            if resp.status_code != 200:
-                return _mock_comps(zip_code, bedrooms, sqft, asking_price)
-            data = resp.json()
-    except Exception:
-        return _mock_comps(zip_code, bedrooms, sqft, asking_price)
-    six_ago = date.today() - timedelta(days=182)
-    comps = []
-    for p in data.get("property", []):
+    # Try up to 12 months, then 24 months if not enough comps
+    for days_back in (365, 730):
+        start_date = (date.today() - timedelta(days=days_back)).strftime("%Y-%m-%d")
         try:
-            building = p.get("building",{})
-            sale = p.get("sale",{})
-            amount = sale.get("amount",{})
-            rooms = building.get("rooms",{})
-            size = building.get("size",{})
-            sold_price = float(amount.get("saleamt") or 0)
-            comp_sqft  = int(size.get("livingsize") or 0)
-            sold_date_str = sale.get("contractDate") or sale.get("saleRecDate") or ""
-            if not sold_date_str or sold_price == 0 or comp_sqft == 0: continue
-            sold_dt = date.fromisoformat(sold_date_str[:10])
-            if sold_dt < six_ago: continue
-            if sqft and not (sqft*0.80 <= comp_sqft <= sqft*1.20): continue
-            comp_beds = int(rooms.get("beds") or 0)
-            if bedrooms and comp_beds and abs(comp_beds-bedrooms) > 1: continue
-            psqft = round(sold_price/comp_sqft, 2)
-            addr_info = p.get("address",{})
-            comps.append({"address": addr_info.get("oneLine",""), "sold_price": sold_price,
-                "sqft": comp_sqft, "price_per_sqft": psqft, "sold_date": sold_dt.strftime("%Y-%m-%d"),
-                "bedrooms": comp_beds, "bathrooms": float(rooms.get("bathstotal") or 0),
-                "distance_miles": None, "is_subject": False})
+            async with httpx.AsyncClient(timeout=12) as client:
+                resp = await client.get(f"{ATTOM_BASE}/sale/snapshot",
+                    params={"postalcode": zip_code, "startsalesearchdate": start_date, "pagesize": 100},
+                    headers=HDR_ATTOM)
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
         except Exception:
             continue
-    return comps[:8] if len(comps) >= 3 else _mock_comps(zip_code, bedrooms, sqft, asking_price)
+        cutoff = date.today() - timedelta(days=days_back)
+        comps = []
+        for p in data.get("property", []):
+            try:
+                building  = p.get("building", {})
+                sale      = p.get("sale", {})
+                amount    = sale.get("amount", {})
+                rooms     = building.get("rooms", {})
+                size      = building.get("size", {})
+                sold_price = float(amount.get("saleamt") or 0)
+                comp_sqft  = int(size.get("livingsize") or 0)
+                sold_date_str = sale.get("contractDate") or sale.get("saleRecDate") or ""
+                if not sold_date_str or sold_price < 50000 or comp_sqft == 0:
+                    continue
+                sold_dt = date.fromisoformat(sold_date_str[:10])
+                if sold_dt < cutoff:
+                    continue
+                # Loose sqft filter — ±35% (skip only if we have sqft data)
+                if sqft and comp_sqft and not (sqft * 0.65 <= comp_sqft <= sqft * 1.35):
+                    continue
+                # Loose bed filter — ±2 beds
+                comp_beds = int(rooms.get("beds") or 0)
+                if bedrooms and comp_beds and abs(comp_beds - bedrooms) > 2:
+                    continue
+                psqft     = round(sold_price / comp_sqft, 2)
+                addr_info = p.get("address", {})
+                comps.append({
+                    "address":        addr_info.get("oneLine", ""),
+                    "sold_price":     sold_price,
+                    "sqft":           comp_sqft,
+                    "price_per_sqft": psqft,
+                    "sold_date":      sold_dt.strftime("%Y-%m-%d"),
+                    "bedrooms":       comp_beds,
+                    "bathrooms":      float(rooms.get("bathstotal") or 0),
+                    "distance_miles": None,
+                    "is_subject":     False,
+                })
+            except Exception:
+                continue
+        if len(comps) >= 3:
+            # Sort by most recent first, return top 8
+            comps.sort(key=lambda x: x["sold_date"], reverse=True)
+            return comps[:8]
+    return _mock_comps(zip_code, bedrooms, sqft, asking_price)
