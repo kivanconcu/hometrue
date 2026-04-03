@@ -1,0 +1,32 @@
+services:
+  # ── Backend API ──────────────────────────────────────────────────
+  - type: web
+    name: hometrue-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn main:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    envVars:
+      - key: ATTOM_API_KEY
+        sync: false          # set manually in Render dashboard
+      - key: RENTCAST_API_KEY
+        sync: false          # set manually in Render dashboard
+      - key: FRONTEND_URL
+        value: https://hometrue.onrender.com
+    plan: free
+
+  # ── Frontend (React) ─────────────────────────────────────────────
+  - type: web
+    name: hometrue
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: build
+    envVars:
+      - key: REACT_APP_API_URL
+        value: https://hometrue-api.onrender.com
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    plan: free

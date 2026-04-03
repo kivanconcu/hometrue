@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "HomeTrue",
+    "slug": "hometrue",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#0f1729"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.hometrue.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0f1729"
+      },
+      "package": "com.hometrue.app"
+    }
+  }
+}

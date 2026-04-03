@@ -1,0 +1,457 @@
+"""
+HomeTrue — Flask backend
+Runs on port 8000.
+All data from licensed/official sources only (no scraping).
+"""
+import sys
+import os
+sys.path.insert(0, os.path.dirname(__file__))
+
+import asyncio
+import re
+import statistics
+from io import BytesIO
+
+import httpx
+from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
+from dotenv import load_dotenv
+
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
+
+from routers.property import property_bp, get_property_detail_sync
+from routers.comps import comps_bp, get_comps_sync, get_dom_sync
+from routers.trends import trends_bp, get_trends_sync
+from routers.neighborhood import neighborhood_bp, get_neighborhood_sync
+from services.valuation import (
+    compute_valuation_score, compute_ptr, ptr_benchmark, generate_flags
+)
+from services.pdf_report import generate_pdf
+
+app = Flask(__name__)
+
+# Allow requests from localhost dev + any deployed frontend
+_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    os.getenv("FRONTEND_URL", ""),
+]
+CORS(app, origins=[o for o in _ALLOWED_ORIGINS if o])
+
+ATTOM_KEY     = os.getenv("ATTOM_API_KEY", "")
+RENTCAST_KEY  = os.getenv("RENTCAST_API_KEY", "")
+RENTCAST_BASE = "https://api.rentcast.io/v1"
+
+app.register_blueprint(property_bp)
+app.register_blueprint(comps_bp)
+app.register_blueprint(trends_bp)
+app.register_blueprint(neighborhood_bp)
+
+
+# ─── Property pre-fill via RentCast (replaces Zillow scraping) ───────────────
+
+async def _fetch_rentcast_property(address, city, state, zip_code):
+    """
+    Use RentCast /v1/properties to pre-fill property details.
+    Returns dict with price, bedrooms, bathrooms, sqft, year_built or None.
+    """
+    if not RENTCAST_KEY:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "{}/properties".format(RENTCAST_BASE),
+                params={
+                    "address": address,
+                    "city":    city,
+                    "state":   state,
+                    "zipCode": zip_code,
+                },
+                headers={"X-Api-Key": RENTCAST_KEY},
+            )
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            if isinstance(data, list):
+                data = data[0] if data else {}
+            if not data:
+                return None
+            result = {
+                "bedrooms":   data.get("bedrooms"),
+                "bathrooms":  data.get("bathrooms"),
+                "sqft":       data.get("squareFootage") or data.get("livingArea"),
+                "year_built": data.get("yearBuilt"),
+                "lot_size":   data.get("lotSize"),
+                "property_type": data.get("propertyType", "Single Family"),
+                "assessed_value": (data.get("assessedValue")
+                                   or data.get("taxAssessment")),
+                "lat":  data.get("latitude"),
+                "lon":  data.get("longitude"),
+            }
+            # RentCast AVM price estimate
+            if data.get("price") or data.get("lastSalePrice"):
+                result["avm_price"] = data.get("price") or data.get("lastSalePrice")
+            return {k: v for k, v in result.items() if v is not None}
+    except Exception:
+        pass
+    return None
+
+
+@app.route("/api/property/prefill")
+def property_prefill():
+    """
+    Pre-fill property details for the search form.
+    Uses RentCast /v1/properties (licensed data, no scraping).
+    """
+    address  = request.args.get("address", "")
+    city     = request.args.get("city", "")
+    state    = request.args.get("state", "")
+    zip_code = request.args.get("zip_code", "")
+    if not address:
+        return jsonify({"found": False}), 200
+    try:
+        result = asyncio.run(_fetch_rentcast_property(address, city, state, zip_code))
+    except Exception:
+        result = None
+    if not result:
+        return jsonify({"found": False}), 200
+    result["found"] = True
+    return jsonify(result)
+
+
+# ─── Rent helpers ─────────────────────────────────────────────────────────────
+
+def _heuristic_rent(zip_code, bedrooms):
+    import random
+    rng = random.Random(str(zip_code))
+    base = rng.uniform(900, 2200)
+    per_bed = {1: 0.8, 2: 1.0, 3: 1.25, 4: 1.5, 5: 1.8}
+    mult = per_bed.get(int(bedrooms or 3), 1.25)
+    return round(base * mult, -1)
+
+
+async def _fetch_rentcast_rent(address, city, state, zip_code, bedrooms, bathrooms):
+    """RentCast AVM rent estimate."""
+    if not RENTCAST_KEY:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "{}/avm/rent/long-term".format(RENTCAST_BASE),
+                params={
+                    "address":      address,
+                    "city":         city,
+                    "state":        state,
+                    "zipCode":      zip_code,
+                    "propertyType": "Single Family",
+                    "bedrooms":     int(bedrooms or 3),
+                    "bathrooms":    float(bathrooms or 2.0),
+                },
+                headers={"X-Api-Key": RENTCAST_KEY},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                rent = data.get("rent") or data.get("rentZestimate") or 0
+                if float(rent) > 0:
+                    return float(rent)
+    except Exception:
+        pass
+    return None
+
+
+async def _fetch_census_rent(zip_code, bedrooms):
+    """
+    Census ACS 5-Year median gross rent by bedroom count.
+    B25031_002E=studio, _003E=1BR, _004E=2BR, _005E=3BR, _006E=4BR
+    """
+    try:
+        beds = int(bedrooms or 3)
+        bed_var = {0: "B25031_002E", 1: "B25031_003E", 2: "B25031_004E",
+                   3: "B25031_005E", 4: "B25031_006E"}.get(beds, "B25031_005E")
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://api.census.gov/data/2022/acs/acs5",
+                params={
+                    "get": bed_var,
+                    "for": "zip code tabulation area:{}".format(zip_code),
+                },
+            )
+            if resp.status_code == 200:
+                rows = resp.json()
+                if len(rows) >= 2:
+                    val = float(rows[1][0])
+                    if val > 0:
+                        return val
+    except Exception:
+        pass
+    return None
+
+
+async def _fetch_hud_fmr(zip_code, bedrooms):
+    """HUD Fair Market Rents via Census geocoder → county FIPS → HUD API."""
+    try:
+        async with httpx.AsyncClient(timeout=12) as client:
+            geo = await client.get(
+                "https://geocoding.geo.census.gov/geocoder/geographies/address",
+                params={
+                    "street":    "1 Main St",
+                    "zip":       zip_code,
+                    "benchmark": "Public_AR_Current",
+                    "vintage":   "Current_Current",
+                    "format":    "json",
+                },
+            )
+            if geo.status_code != 200:
+                return None
+            matches = geo.json().get("result", {}).get("addressMatches", [])
+            if not matches:
+                return None
+            counties = matches[0].get("geographies", {}).get("Counties", [])
+            if not counties:
+                return None
+            fips = counties[0].get("GEOID", "")
+            if not fips:
+                return None
+            hud = await client.get(
+                "https://www.huduser.gov/hudapi/public/fmr/data/{}".format(fips),
+                params={"year": "2025"},
+            )
+            if hud.status_code != 200:
+                return None
+            bed_map = {0: "Efficiency", 1: "One-Bedroom", 2: "Two-Bedroom",
+                       3: "Three-Bedroom", 4: "Four-Bedroom"}
+            bed_key = bed_map.get(int(bedrooms or 3), "Three-Bedroom")
+            basic = hud.json().get("data", {}).get("basicdata", {})
+            fmr = basic.get(bed_key)
+            if fmr and float(fmr) > 0:
+                return float(fmr)
+    except Exception:
+        pass
+    return None
+
+
+async def _fetch_rent(address, city, state, zip_code, bedrooms, bathrooms):
+    """
+    Rent estimate chain (all licensed/official sources):
+      1. RentCast AVM           (licensed data, most accurate)
+      2. Census ACS median rent by bedroom (free govt, ZIP-level)
+      3. HUD Fair Market Rents  (free govt, county-level)
+      4. Heuristic fallback
+    Returns (rent_estimate, source_label)
+    """
+    rent = await _fetch_rentcast_rent(address, city, state, zip_code, bedrooms, bathrooms)
+    if rent:
+        return rent, "RentCast AVM"
+
+    rent = await _fetch_census_rent(zip_code, bedrooms)
+    if rent:
+        return rent, "U.S. Census ACS (median rent by ZIP)"
+
+    rent = await _fetch_hud_fmr(zip_code, bedrooms)
+    if rent:
+        return rent, "HUD Fair Market Rents"
+
+    return _heuristic_rent(zip_code, bedrooms), "Estimated (heuristic)"
+
+
+# ─── Tax assessed value via RentCast /properties ─────────────────────────────
+
+async def _fetch_rentcast_assessed(address, city, state, zip_code):
+    """RentCast /v1/properties — returns county-record assessed value."""
+    if not RENTCAST_KEY:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "{}/properties".format(RENTCAST_BASE),
+                params={
+                    "address": address,
+                    "city":    city,
+                    "state":   state,
+                    "zipCode": zip_code,
+                },
+                headers={"X-Api-Key": RENTCAST_KEY},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, list):
+                    data = data[0] if data else {}
+                val = data.get("assessedValue") or data.get("taxAssessment")
+                if val and float(val) > 0:
+                    return float(val)
+    except Exception:
+        pass
+    return None
+
+
+# ─── Main analyze endpoint ────────────────────────────────────────────────────
+
+@app.route("/api/analyze", methods=["POST"])
+def analyze():
+    req = request.get_json()
+    if not req:
+        return jsonify({"error": "No JSON body"}), 400
+
+    address   = req.get("address", "")
+    city      = req.get("city", "")
+    state     = req.get("state", "US")
+    zip_code  = req.get("zip_code", "00000")
+    lat       = req.get("lat")
+    lon       = req.get("lon")
+    asking    = req.get("asking_price")
+    bedrooms  = req.get("bedrooms", 3)
+    bathrooms = req.get("bathrooms", 2.0)
+    sqft      = req.get("sqft", 1500)
+
+    async def _gather():
+        return await asyncio.gather(
+            get_property_detail_sync(address, city, state, zip_code),
+            get_comps_sync(zip_code, bedrooms or 3, bathrooms or 2.0, sqft or 1500, asking or 300000),
+            get_neighborhood_sync(zip_code, asking or 0),
+            get_trends_sync(state, asking or 300000),
+            _fetch_rent(address, city, state, zip_code, bedrooms or 3, bathrooms or 2.0),
+            _fetch_rentcast_assessed(address, city, state, zip_code),
+            _fetch_rentcast_property(address, city, state, zip_code),
+        )
+
+    prop, comps, neighborhood, trends, rent_result, rc_assessed, rc_prop = asyncio.run(_gather())
+    monthly_rent, rent_source = rent_result if isinstance(rent_result, tuple) else (rent_result, "Unknown")
+    dom_data = get_dom_sync(zip_code)
+
+    # ── Merge RentCast property data (fill gaps only) ──
+    if rc_prop:
+        if not prop.get("bedrooms") and rc_prop.get("bedrooms"):
+            prop["bedrooms"] = rc_prop["bedrooms"]
+        if not prop.get("bathrooms") and rc_prop.get("bathrooms"):
+            prop["bathrooms"] = rc_prop["bathrooms"]
+        if not prop.get("sqft") and rc_prop.get("sqft"):
+            prop["sqft"] = rc_prop["sqft"]
+        if not prop.get("year_built") and rc_prop.get("year_built"):
+            prop["year_built"] = rc_prop["year_built"]
+        if not prop.get("lat") and rc_prop.get("lat"):
+            prop["lat"] = rc_prop["lat"]
+            prop["lon"] = rc_prop["lon"]
+        # RentCast AVM price — only use if user didn't supply asking price
+        if not asking and rc_prop.get("avm_price"):
+            prop["asking_price"] = rc_prop["avm_price"]
+            prop["list_price"]   = rc_prop["avm_price"]
+            prop["is_mock"] = False
+        elif rc_prop.get("bedrooms"):
+            prop["is_mock"] = False
+
+    # ── User-supplied fields always override everything ──
+    if asking:    prop["asking_price"] = asking
+    if bedrooms:  prop["bedrooms"]     = bedrooms
+    if bathrooms: prop["bathrooms"]    = bathrooms
+    if sqft:      prop["sqft"]         = sqft
+    if lat:       prop["lat"]          = lat
+    if lon:       prop["lon"]          = lon
+    prop["city"]  = city  or prop.get("city", "")
+    prop["state"] = state or prop.get("state", "")
+
+    dom_zip_avg = float(dom_data.get("avg_dom", 30))
+    ask_price   = prop.get("asking_price")
+
+    # ── Tax assessed value: RentCast → ATTOM → Census ACS estimate ──
+    if rc_assessed and rc_assessed > 0:
+        prop["tax_assessed_value"] = rc_assessed
+        prop["tax_source"] = "RentCast (county records)"
+    elif prop.get("tax_assessed_value") and not prop.get("is_mock"):
+        prop["tax_source"] = "ATTOM"
+    else:
+        eff_rate = neighborhood.get("effective_tax_rate")
+        if eff_rate and ask_price:
+            prop["tax_assessed_value"] = round(ask_price * 0.85)
+            prop["tax_source"] = "Estimated (Census ACS {:.2f}% local rate)".format(eff_rate)
+        else:
+            prop["tax_assessed_value"] = None
+            prop["tax_source"] = "Not available — check county assessor"
+
+    prop_sqft     = prop.get("sqft")
+    subject_psqft = round(ask_price / prop_sqft, 2) if ask_price and prop_sqft else None
+    comp_psqfts   = [c["price_per_sqft"] for c in comps if c.get("price_per_sqft", 0) > 0]
+    avg_psqft     = round(statistics.mean(comp_psqfts), 2)    if comp_psqfts else 0.0
+    median_psqft  = round(statistics.median(comp_psqfts), 2)  if comp_psqfts else 0.0
+
+    ptr       = compute_ptr(ask_price, monthly_rent)
+    ptr_bench = ptr_benchmark(ptr)
+
+    valuation = compute_valuation_score(
+        subject_price_per_sqft=subject_psqft,
+        median_comp_price_per_sqft=median_psqft,
+        days_on_market=prop.get("days_on_market"),
+        dom_zip_average=dom_zip_avg,
+        price_to_rent_ratio=ptr,
+        price_reductions=prop.get("price_reductions", 0),
+        total_price_reduction=prop.get("total_price_reduction", 0.0),
+        asking_price=ask_price,
+        tax_assessed_value=prop.get("tax_assessed_value"),
+    )
+
+    raw_flags = generate_flags(
+        subject_psqft=subject_psqft,
+        median_comp_psqft=median_psqft,
+        days_on_market=prop.get("days_on_market"),
+        dom_zip_average=dom_zip_avg,
+        ptr=ptr,
+        price_reductions=prop.get("price_reductions", 0),
+        total_price_reduction=prop.get("total_price_reduction", 0.0),
+        asking_price=ask_price,
+        tax_assessed_value=prop.get("tax_assessed_value"),
+        neighborhood_income=neighborhood.get("median_income"),
+    )
+
+    is_mock = prop.get("is_mock") or neighborhood.get("is_mock") or trends.get("is_mock")
+
+    return jsonify({
+        "property":               prop,
+        "comps":                  comps,
+        "valuation_score":        valuation,
+        "neighborhood":           neighborhood,
+        "trends":                 trends,
+        "price_to_rent_ratio":    ptr,
+        "monthly_rent_estimate":  monthly_rent,
+        "rent_source":            rent_source,
+        "ptr_benchmark":          ptr_bench,
+        "avg_comp_price_per_sqft":    avg_psqft,
+        "median_comp_price_per_sqft": median_psqft,
+        "subject_price_per_sqft":     subject_psqft,
+        "dom_zip_average":        dom_zip_avg,
+        "estimated_annual_tax":   neighborhood.get("estimated_annual_tax"),
+        "effective_tax_rate":     neighborhood.get("effective_tax_rate"),
+        "tax_source":             prop.get("tax_source"),
+        "flags":                  raw_flags,
+        "is_mock":                is_mock,
+        "disclaimer": "Some data uses estimated values. Results are for informational purposes only." if is_mock else None,
+    })
+
+
+@app.route("/api/report", methods=["POST"])
+def report():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data"}), 400
+    try:
+        pdf_bytes = generate_pdf(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return send_file(
+        BytesIO(pdf_bytes),
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name="HomeTrue_Report.pdf",
+    )
+
+
+@app.route("/api/health")
+def health():
+    return jsonify({
+        "status":              "ok",
+        "attom_configured":    bool(ATTOM_KEY),
+        "rentcast_configured": bool(RENTCAST_KEY),
+    })
+
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 8000))
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
