@@ -4,13 +4,14 @@
 
 @layer base {
   body {
-    @apply bg-navy-900 text-white font-sans antialiased;
+    @apply bg-white text-gray-900 font-sans antialiased;
   }
 }
 
 @layer components {
+  /* Dark cards used inside the results tool */
   .card {
-    @apply bg-white/5 border border-white/10 rounded-2xl overflow-hidden;
+    @apply bg-gray-900 border border-white/10 rounded-2xl overflow-hidden;
   }
   .card-header {
     @apply flex items-center justify-between px-5 py-4 cursor-pointer select-none;
@@ -18,34 +19,38 @@
   .card-body {
     @apply px-5 pb-5;
   }
+  /* Light cards used on landing sections */
+  .card-light {
+    @apply bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm;
+  }
   .badge-green {
-    @apply inline-flex items-center gap-1 bg-green-500/20 text-green-400 text-xs font-medium px-2.5 py-0.5 rounded-full;
+    @apply inline-flex items-center gap-1 bg-green-500/20 text-green-600 text-xs font-medium px-2.5 py-0.5 rounded-full;
+  }
+  .badge-orange {
+    @apply inline-flex items-center gap-1 bg-orange-500/15 text-orange-600 text-xs font-medium px-2.5 py-0.5 rounded-full;
   }
   .badge-yellow {
-    @apply inline-flex items-center gap-1 bg-yellow-500/20 text-yellow-400 text-xs font-medium px-2.5 py-0.5 rounded-full;
+    @apply inline-flex items-center gap-1 bg-yellow-500/20 text-yellow-600 text-xs font-medium px-2.5 py-0.5 rounded-full;
   }
   .badge-red {
-    @apply inline-flex items-center gap-1 bg-red-500/20 text-red-400 text-xs font-medium px-2.5 py-0.5 rounded-full;
+    @apply inline-flex items-center gap-1 bg-red-500/20 text-red-600 text-xs font-medium px-2.5 py-0.5 rounded-full;
   }
   .source-tag {
-    @apply text-xs text-slate-400 font-normal;
+    @apply text-xs text-gray-400 font-normal;
   }
   .skeleton {
-    @apply animate-pulse bg-white/10 rounded-lg;
+    @apply animate-pulse bg-gray-800 rounded-lg;
   }
-  .tooltip-wrapper {
-    @apply relative inline-flex items-center gap-1;
+  .btn-orange {
+    @apply bg-orange-500 hover:bg-orange-600 text-white font-bold transition rounded-xl;
   }
-  .tooltip-icon {
-    @apply w-4 h-4 rounded-full bg-white/20 text-white/60 text-xs flex items-center justify-center cursor-help flex-shrink-0;
-  }
-  .tooltip-box {
-    @apply absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 bg-navy-900 border border-white/20 text-white/80 text-xs rounded-lg px-3 py-2 shadow-xl pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150;
+  .btn-outline {
+    @apply border border-gray-300 hover:border-orange-400 text-gray-700 hover:text-orange-600 font-medium transition rounded-xl;
   }
 }
 
 /* Custom scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.25); }
+::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.25); }

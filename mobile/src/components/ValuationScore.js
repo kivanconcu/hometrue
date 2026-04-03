@@ -1,18 +1,12 @@
 import React from "react";
 import { View, Text, StyleSheet } from "react-native";
-import Svg, { Path, Circle, Line, Text as SvgText } from "react-native-svg";
 import { colors, spacing, radii, typography } from "../theme";
 
 const SCORE_COLORS = {
-  green: { stroke: "#22c55e", text: "#22c55e", bg: "rgba(34,197,94,0.12)" },
-  yellow: { stroke: "#eab308", text: "#eab308", bg: "rgba(234,179,8,0.12)" },
-  red: { stroke: "#ef4444", text: "#ef4444", bg: "rgba(239,68,68,0.12)" },
+  green: { text: "#22c55e", bg: "rgba(34,197,94,0.12)", border: "rgba(34,197,94,0.3)" },
+  yellow: { text: "#eab308", bg: "rgba(234,179,8,0.12)", border: "rgba(234,179,8,0.3)" },
+  red: { text: "#ef4444", bg: "rgba(239,68,68,0.12)", border: "rgba(239,68,68,0.3)" },
 };
-
-function polarToXY(cx, cy, r, angleDeg) {
-  const rad = (angleDeg * Math.PI) / 180;
-  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
-}
 
 function ScoreBar({ label, score, weight }) {
   const pct = Math.round(score || 0);
@@ -44,115 +38,50 @@ export default function ValuationScore({ valuation_score }) {
   const { score, label, color, breakdown } = valuation_score;
   const c = SCORE_COLORS[color] || SCORE_COLORS.yellow;
 
-  const R = 80;
-  const CX = 100;
-  const CY = 100;
-  const startAngle = -180;
-  const scoreAngle = startAngle + (score / 100) * 180;
-
-  const trackStart = polarToXY(CX, CY, R, startAngle);
-  const trackEnd = polarToXY(CX, CY, R, 0);
-  const fillEnd = polarToXY(CX, CY, R, scoreAngle);
-  const needleTip = polarToXY(CX, CY, R - 10, scoreAngle);
-
-  const largeFillArc = score > 50 ? 1 : 0;
-
-  const segments = [
-    { from: -180, to: -126, col: "#22c55e" },
-    { from: -126, to: -72, col: "#86efac" },
-    { from: -72, to: -36, col: "#eab308" },
-    { from: -36, to: 0, col: "#ef4444" },
-  ];
+  const trackColor = color === "green" ? colors.green : color === "red" ? colors.red : colors.yellow;
 
   return (
     <View style={styles.container}>
-      {/* SVG Gauge */}
-      <View style={styles.gaugeWrapper}>
-        <Svg width={220} height={120} viewBox="0 0 200 110">
-          {/* Background track */}
-          <Path
-            d={`M ${trackStart.x} ${trackStart.y} A ${R} ${R} 0 0 1 ${trackEnd.x} ${trackEnd.y}`}
-            fill="none"
-            stroke="rgba(255,255,255,0.1)"
-            strokeWidth="14"
-            strokeLinecap="round"
+      {/* Score display */}
+      <View style={[styles.scoreCircle, { borderColor: c.border, backgroundColor: c.bg }]}>
+        <Text style={[styles.scoreNumber, { color: c.text }]}>{score}</Text>
+        <Text style={[styles.scoreOutOf, { color: c.text }]}>/100</Text>
+      </View>
+
+      {/* Progress bar */}
+      <View style={styles.progressRow}>
+        <Text style={styles.progressLabel}>0</Text>
+        <View style={styles.progressTrack}>
+          <View
+            style={[
+              styles.progressFill,
+              { width: `${score}%`, backgroundColor: trackColor },
+            ]}
           />
-
-          {/* Zone segments */}
-          {segments.map((seg, i) => {
-            const s = polarToXY(CX, CY, R, seg.from);
-            const e = polarToXY(CX, CY, R, seg.to);
-            const large = seg.to - seg.from > 180 ? 1 : 0;
-            return (
-              <Path
-                key={i}
-                d={`M ${s.x} ${s.y} A ${R} ${R} 0 ${large} 1 ${e.x} ${e.y}`}
-                fill="none"
-                stroke={seg.col}
-                strokeWidth="14"
-                strokeLinecap="butt"
-                opacity="0.25"
-              />
-            );
-          })}
-
-          {/* Fill arc */}
-          {score > 0 && (
-            <Path
-              d={`M ${trackStart.x} ${trackStart.y} A ${R} ${R} 0 ${largeFillArc} 1 ${fillEnd.x} ${fillEnd.y}`}
-              fill="none"
-              stroke={c.stroke}
-              strokeWidth="14"
-              strokeLinecap="round"
-            />
-          )}
-
-          {/* Needle */}
-          <Line
-            x1={CX}
-            y1={CY}
-            x2={needleTip.x}
-            y2={needleTip.y}
-            stroke="white"
-            strokeWidth="2.5"
-            strokeLinecap="round"
-          />
-          <Circle cx={CX} cy={CY} r="5" fill="white" opacity="0.9" />
-
-          {/* Labels */}
-          <SvgText x="18" y="108" fill="#22c55e" fontSize="9" fontWeight="600">
-            0
-          </SvgText>
-          <SvgText
-            x="90"
-            y="18"
-            fill="#eab308"
-            fontSize="9"
-            fontWeight="600"
-            textAnchor="middle"
-          >
-            50
-          </SvgText>
-          <SvgText
-            x="178"
-            y="108"
-            fill="#ef4444"
-            fontSize="9"
-            fontWeight="600"
-          >
-            100
-          </SvgText>
-        </Svg>
-
-        {/* Score number overlay */}
-        <View style={styles.scoreOverlay}>
-          <Text style={[styles.scoreNumber, { color: c.text }]}>{score}</Text>
+          <View style={[styles.progressMarker, { left: `${score}%` }]} />
         </View>
+        <Text style={styles.progressLabel}>100</Text>
       </View>
 
       {/* Label badge */}
-      <View style={[styles.labelBadge, { backgroundColor: c.bg }]}>
+      <View style={[styles.labelBadge, { backgroundColor: c.bg, borderColor: c.border }]}>
         <Text style={[styles.labelText, { color: c.text }]}>{label}</Text>
+      </View>
+
+      {/* Zone legend */}
+      <View style={styles.legendRow}>
+        <View style={styles.legendItem}>
+          <View style={[styles.legendDot, { backgroundColor: colors.green }]} />
+          <Text style={styles.legendText}>Undervalued (0–30)</Text>
+        </View>
+        <View style={styles.legendItem}>
+          <View style={[styles.legendDot, { backgroundColor: colors.yellow }]} />
+          <Text style={styles.legendText}>Fair (31–60)</Text>
+        </View>
+        <View style={styles.legendItem}>
+          <View style={[styles.legendDot, { backgroundColor: colors.red }]} />
+          <Text style={styles.legendText}>Overvalued (61+)</Text>
+        </View>
       </View>
 
       {/* Breakdown bars */}
@@ -201,34 +130,94 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingVertical: spacing.md,
   },
-  gaugeWrapper: {
-    position: "relative",
+  scoreCircle: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    borderWidth: 3,
     alignItems: "center",
     justifyContent: "center",
-  },
-  scoreOverlay: {
-    position: "absolute",
-    bottom: 4,
-    alignSelf: "center",
+    marginBottom: spacing.lg,
   },
   scoreNumber: {
-    fontSize: 36,
+    fontSize: 42,
     fontWeight: "900",
-    lineHeight: 40,
+    lineHeight: 46,
+  },
+  scoreOutOf: {
+    fontSize: typography.sm,
+    fontWeight: "600",
+    opacity: 0.7,
+  },
+  progressRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    width: "100%",
+    marginBottom: spacing.md,
+    gap: spacing.sm,
+  },
+  progressLabel: {
+    color: colors.textMuted,
+    fontSize: typography.xs,
+    width: 20,
+    textAlign: "center",
+  },
+  progressTrack: {
+    flex: 1,
+    height: 8,
+    backgroundColor: "rgba(255,255,255,0.1)",
+    borderRadius: radii.full,
+    overflow: "hidden",
+    position: "relative",
+  },
+  progressFill: {
+    height: "100%",
+    borderRadius: radii.full,
+  },
+  progressMarker: {
+    position: "absolute",
+    top: -2,
+    width: 3,
+    height: 12,
+    backgroundColor: "white",
+    borderRadius: 2,
+    marginLeft: -1,
   },
   labelBadge: {
-    marginTop: spacing.sm,
+    marginBottom: spacing.lg,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.xs + 2,
     borderRadius: radii.full,
+    borderWidth: 1,
   },
   labelText: {
     fontSize: typography.sm,
     fontWeight: "700",
   },
+  legendRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.md,
+    marginBottom: spacing.xl,
+    justifyContent: "center",
+  },
+  legendItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  legendText: {
+    color: colors.textSecondary,
+    fontSize: typography.xs,
+  },
   breakdownContainer: {
     width: "100%",
-    marginTop: spacing.xl,
+    marginTop: spacing.sm,
   },
   divider: {
     height: 1,
@@ -272,7 +261,6 @@ const barStyles = StyleSheet.create({
     width: 28,
     textAlign: "right",
     fontSize: typography.xs,
-    fontVariant: ["tabular-nums"],
   },
   pctHeader: {
     width: 28,

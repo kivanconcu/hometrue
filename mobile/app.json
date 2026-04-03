@@ -4,8 +4,9 @@
     "slug": "hometrue",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "https://via.placeholder.com/1024x1024/0f1729/22c55e?text=HT",
     "userInterfaceStyle": "dark",
+    "newArchEnabled": false,
     "splash": {
       "backgroundColor": "#0f1729"
     },

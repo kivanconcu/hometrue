@@ -327,10 +327,11 @@ export default function ResultsScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: colors.bg,
+    backgroundColor: "#0f1729",
   },
   scroll: {
     flex: 1,
+    backgroundColor: "#0f1729",
   },
   scrollContent: {
     padding: spacing.xl,

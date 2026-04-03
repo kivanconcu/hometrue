@@ -1,6 +1,5 @@
 import React from "react";
 import { View, Text, StyleSheet } from "react-native";
-import Svg, { Circle } from "react-native-svg";
 import { colors, spacing, radii, typography } from "../theme";
 
 function StatCard({ label, value, sub, accentColor }) {
@@ -15,38 +14,24 @@ function StatCard({ label, value, sub, accentColor }) {
   );
 }
 
-function DonutChart({ ownerPct }) {
-  const r = 28;
-  const cx = 32;
-  const cy = 32;
-  const circ = 2 * Math.PI * r;
-  const ownerDash = (ownerPct / 100) * circ;
-
+function OwnerRenterBar({ ownerPct, renterPct }) {
   return (
-    <Svg width={64} height={64} viewBox="0 0 64 64">
-      {/* Background track */}
-      <Circle
-        cx={cx}
-        cy={cy}
-        r={r}
-        fill="none"
-        stroke="rgba(255,255,255,0.08)"
-        strokeWidth={10}
-      />
-      {/* Owner segment */}
-      <Circle
-        cx={cx}
-        cy={cy}
-        r={r}
-        fill="none"
-        stroke={colors.green}
-        strokeWidth={10}
-        strokeDasharray={`${ownerDash} ${circ}`}
-        strokeLinecap="butt"
-        transform={`rotate(-90 ${cx} ${cy})`}
-        opacity={0.85}
-      />
-    </Svg>
+    <View style={styles.barChartContainer}>
+      <View style={styles.splitBarTrack}>
+        <View style={[styles.splitBarOwner, { flex: ownerPct }]} />
+        <View style={[styles.splitBarRenter, { flex: renterPct }]} />
+      </View>
+      <View style={styles.splitLegend}>
+        <View style={styles.legendItem}>
+          <View style={[styles.legendDot, { backgroundColor: colors.green }]} />
+          <Text style={styles.legendText}>{ownerPct.toFixed(0)}% own</Text>
+        </View>
+        <View style={styles.legendItem}>
+          <View style={[styles.legendDot, { backgroundColor: "rgba(255,255,255,0.2)" }]} />
+          <Text style={styles.legendText}>{renterPct.toFixed(0)}% rent</Text>
+        </View>
+      </View>
+    </View>
   );
 }
 
@@ -115,24 +100,10 @@ export default function NeighborhoodStats({ neighborhood }) {
           accentColor={colors.blue}
         />
 
-        {/* Owner vs Renter donut */}
+        {/* Owner vs Renter bar */}
         <View style={styles.donutCard}>
           <Text style={styles.statLabel}>Owner vs. Renter</Text>
-          <View style={styles.donutRow}>
-            <DonutChart ownerPct={ownerPct} />
-            <View style={styles.donutLegend}>
-              <View style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: colors.green }]} />
-                <Text style={styles.legendPct}>{ownerPct.toFixed(0)}%</Text>
-                <Text style={styles.legendLbl}>own</Text>
-              </View>
-              <View style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: "rgba(255,255,255,0.2)" }]} />
-                <Text style={styles.legendPct}>{renterPct.toFixed(0)}%</Text>
-                <Text style={styles.legendLbl}>rent</Text>
-              </View>
-            </View>
-          </View>
+          <OwnerRenterBar ownerPct={ownerPct} renterPct={renterPct} />
         </View>
       </View>
 
@@ -205,31 +176,39 @@ const styles = StyleSheet.create({
     borderRadius: radii.lg,
     padding: spacing.lg,
   },
-  donutRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.lg,
-    marginTop: 6,
-  },
-  donutLegend: {
+  barChartContainer: {
+    marginTop: spacing.sm,
     gap: 6,
+  },
+  splitBarTrack: {
+    flexDirection: "row",
+    height: 10,
+    borderRadius: radii.full,
+    overflow: "hidden",
+  },
+  splitBarOwner: {
+    backgroundColor: colors.green,
+    opacity: 0.85,
+  },
+  splitBarRenter: {
+    backgroundColor: "rgba(255,255,255,0.15)",
+  },
+  splitLegend: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    flexWrap: "wrap",
   },
   legendItem: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
+    gap: 4,
   },
   legendDot: {
-    width: 10,
-    height: 10,
+    width: 8,
+    height: 8,
     borderRadius: 2,
   },
-  legendPct: {
-    color: colors.textPrimary,
-    fontSize: typography.xs,
-    fontWeight: "600",
-  },
-  legendLbl: {
+  legendText: {
     color: colors.textSecondary,
     fontSize: typography.xs,
   },

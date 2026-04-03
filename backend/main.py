@@ -9,11 +9,16 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 import asyncio
 import re
+import sqlite3
 import statistics
+import datetime
 from io import BytesIO
+from functools import wraps
 
+import bcrypt
+import jwt
 import httpx
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, g
 from flask_cors import CORS
 from dotenv import load_dotenv
 
@@ -46,6 +51,126 @@ app.register_blueprint(property_bp)
 app.register_blueprint(comps_bp)
 app.register_blueprint(trends_bp)
 app.register_blueprint(neighborhood_bp)
+
+# ─── Auth / User database ─────────────────────────────────────────────────────
+
+JWT_SECRET = os.getenv("JWT_SECRET", "hometrue-dev-secret-change-in-prod")
+DB_PATH    = os.path.join(os.path.dirname(__file__), "users.db")
+
+PLAN_LIMITS = {
+    "starter":   20,
+    "pro":       200,
+    "unlimited": 999999,
+    "free":      3,      # trial
+}
+
+def get_db():
+    db = sqlite3.connect(DB_PATH)
+    db.row_factory = sqlite3.Row
+    return db
+
+def init_db():
+    db = get_db()
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            email         TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            plan          TEXT NOT NULL DEFAULT 'free',
+            searches_used INTEGER NOT NULL DEFAULT 0,
+            reset_date    TEXT NOT NULL,
+            created_at    TEXT NOT NULL
+        )
+    """)
+    db.commit()
+    db.close()
+
+init_db()
+
+def make_token(user_id):
+    payload = {
+        "sub": user_id,
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+def require_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer "):
+            return jsonify({"detail": "Unauthorized"}), 401
+        token = auth[7:]
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+            db = get_db()
+            user = db.execute("SELECT * FROM users WHERE id=?", (payload["sub"],)).fetchone()
+            db.close()
+            if not user:
+                return jsonify({"detail": "User not found"}), 401
+            g.user = dict(user)
+        except jwt.ExpiredSignatureError:
+            return jsonify({"detail": "Token expired"}), 401
+        except Exception:
+            return jsonify({"detail": "Invalid token"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+def _user_json(u):
+    return {
+        "id":           u["id"],
+        "email":        u["email"],
+        "plan":         u["plan"],
+        "searches_used": u["searches_used"],
+        "search_limit": PLAN_LIMITS.get(u["plan"], 3),
+    }
+
+@app.route("/api/auth/register", methods=["POST"])
+def auth_register():
+    data     = request.get_json() or {}
+    email    = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+    plan     = data.get("plan", "free")
+    if not email or not password:
+        return jsonify({"detail": "Email and password required"}), 400
+    if len(password) < 8:
+        return jsonify({"detail": "Password must be at least 8 characters"}), 400
+    if plan not in PLAN_LIMITS:
+        plan = "free"
+    pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    now     = datetime.datetime.utcnow().isoformat()
+    db      = get_db()
+    try:
+        cur = db.execute(
+            "INSERT INTO users (email, password_hash, plan, searches_used, reset_date, created_at) VALUES (?,?,?,0,?,?)",
+            (email, pw_hash, plan, now, now)
+        )
+        db.commit()
+        user = db.execute("SELECT * FROM users WHERE id=?", (cur.lastrowid,)).fetchone()
+        token = make_token(user["id"])
+        return jsonify({"token": token, "user": _user_json(dict(user))}), 201
+    except sqlite3.IntegrityError:
+        return jsonify({"detail": "An account with this email already exists"}), 409
+    finally:
+        db.close()
+
+@app.route("/api/auth/login", methods=["POST"])
+def auth_login():
+    data     = request.get_json() or {}
+    email    = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+    db       = get_db()
+    user     = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+    db.close()
+    if not user or not bcrypt.checkpw(password.encode(), user["password_hash"].encode()):
+        return jsonify({"detail": "Invalid email or password"}), 401
+    token = make_token(user["id"])
+    return jsonify({"token": token, "user": _user_json(dict(user))})
+
+@app.route("/api/auth/me", methods=["GET"])
+@require_auth
+def auth_me():
+    return jsonify(g.user if isinstance(g.user, dict) else _user_json(g.user))
 
 
 # ─── Property pre-fill via RentCast (replaces Zillow scraping) ───────────────
