@@ -177,45 +177,70 @@ def auth_me():
 
 async def _fetch_rentcast_property(address, city, state, zip_code):
     """
-    Use RentCast /v1/properties to pre-fill property details.
-    Returns dict with price, bedrooms, bathrooms, sqft, year_built or None.
+    Use RentCast /v1/properties + /v1/avm/value to get property details and AVM price.
+    Returns dict with avm_price, bedrooms, bathrooms, sqft, year_built, assessed_value or None.
     """
     if not RENTCAST_KEY:
         return None
+    full_address = "{}, {}, {} {}".format(address, city, state, zip_code).strip(", ")
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                "{}/properties".format(RENTCAST_BASE),
-                params={
-                    "address": address,
-                    "city":    city,
-                    "state":   state,
-                    "zipCode": zip_code,
-                },
-                headers={"X-Api-Key": RENTCAST_KEY},
+            # Fetch property details and AVM in parallel
+            prop_resp, avm_resp = await asyncio.gather(
+                client.get(
+                    "{}/properties".format(RENTCAST_BASE),
+                    params={"address": full_address},
+                    headers={"X-Api-Key": RENTCAST_KEY},
+                ),
+                client.get(
+                    "{}/avm/value".format(RENTCAST_BASE),
+                    params={"address": full_address},
+                    headers={"X-Api-Key": RENTCAST_KEY},
+                ),
             )
-            if resp.status_code != 200:
+
+            data = {}
+            if prop_resp.status_code == 200:
+                raw = prop_resp.json()
+                data = raw[0] if isinstance(raw, list) and raw else (raw if isinstance(raw, dict) else {})
+
+            avm_price = None
+            if avm_resp.status_code == 200:
+                avm_data  = avm_resp.json()
+                avm_price = avm_data.get("price") or avm_data.get("value") or avm_data.get("priceRangeLow")
+
+            if not data and not avm_price:
                 return None
-            data = resp.json()
-            if isinstance(data, list):
-                data = data[0] if data else {}
-            if not data:
-                return None
+
+            # Extract assessed value — RentCast nests it under assessments dict
+            assessed = None
+            assessments = data.get("assessments") or {}
+            if assessments:
+                # Get most recent year
+                latest = max(assessments.keys()) if assessments else None
+                if latest:
+                    assessed = (assessments[latest].get("value")
+                                or assessments[latest].get("totalValue"))
+            if not assessed:
+                assessed = (data.get("assessedValue")
+                            or data.get("taxAssessedValue")
+                            or data.get("taxAssessment"))
+
             result = {
-                "bedrooms":   data.get("bedrooms"),
-                "bathrooms":  data.get("bathrooms"),
-                "sqft":       data.get("squareFootage") or data.get("livingArea"),
-                "year_built": data.get("yearBuilt"),
-                "lot_size":   data.get("lotSize"),
-                "property_type": data.get("propertyType", "Single Family"),
-                "assessed_value": (data.get("assessedValue")
-                                   or data.get("taxAssessment")),
-                "lat":  data.get("latitude"),
-                "lon":  data.get("longitude"),
+                "bedrooms":       data.get("bedrooms"),
+                "bathrooms":      data.get("bathrooms"),
+                "sqft":           data.get("squareFootage") or data.get("livingArea"),
+                "year_built":     data.get("yearBuilt"),
+                "lot_size":       data.get("lotSize"),
+                "property_type":  data.get("propertyType", "Single Family"),
+                "assessed_value": assessed,
+                "lat":            data.get("latitude"),
+                "lon":            data.get("longitude"),
             }
-            # RentCast AVM price estimate
-            if data.get("price") or data.get("lastSalePrice"):
-                result["avm_price"] = data.get("price") or data.get("lastSalePrice")
+            # AVM price from /avm/value takes priority; fall back to last sale
+            result["avm_price"] = (avm_price
+                                   or data.get("price")
+                                   or data.get("lastSalePrice"))
             return {k: v for k, v in result.items() if v is not None}
     except Exception:
         pass
@@ -385,23 +410,28 @@ async def _fetch_rentcast_assessed(address, city, state, zip_code):
     """RentCast /v1/properties — returns county-record assessed value."""
     if not RENTCAST_KEY:
         return None
+    full_address = "{}, {}, {} {}".format(address, city, state, zip_code).strip(", ")
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(
                 "{}/properties".format(RENTCAST_BASE),
-                params={
-                    "address": address,
-                    "city":    city,
-                    "state":   state,
-                    "zipCode": zip_code,
-                },
+                params={"address": full_address},
                 headers={"X-Api-Key": RENTCAST_KEY},
             )
             if resp.status_code == 200:
                 data = resp.json()
                 if isinstance(data, list):
                     data = data[0] if data else {}
-                val = data.get("assessedValue") or data.get("taxAssessment")
+                # Check nested assessments first
+                assessments = data.get("assessments") or {}
+                val = None
+                if assessments:
+                    latest = max(assessments.keys()) if assessments else None
+                    if latest:
+                        val = (assessments[latest].get("value")
+                               or assessments[latest].get("totalValue"))
+                if not val:
+                    val = data.get("assessedValue") or data.get("taxAssessedValue") or data.get("taxAssessment")
                 if val and float(val) > 0:
                     return float(val)
     except Exception:
