@@ -247,6 +247,36 @@ async def _fetch_rentcast_property(address, city, state, zip_code):
     return None
 
 
+@app.route("/api/debug/rentcast")
+def debug_rentcast():
+    """Temporary debug endpoint — shows raw RentCast response."""
+    address  = request.args.get("address", "")
+    city     = request.args.get("city", "")
+    state    = request.args.get("state", "")
+    zip_code = request.args.get("zip_code", "")
+    full_address = "{}, {}, {} {}".format(address, city, state, zip_code).strip(", ")
+
+    async def _fetch():
+        async with httpx.AsyncClient(timeout=10) as client:
+            prop_resp, avm_resp = await asyncio.gather(
+                client.get("{}/properties".format(RENTCAST_BASE),
+                    params={"address": full_address},
+                    headers={"X-Api-Key": RENTCAST_KEY}),
+                client.get("{}/avm/value".format(RENTCAST_BASE),
+                    params={"address": full_address},
+                    headers={"X-Api-Key": RENTCAST_KEY}),
+            )
+            return {
+                "full_address": full_address,
+                "properties_status": prop_resp.status_code,
+                "properties_raw": prop_resp.json() if prop_resp.status_code == 200 else prop_resp.text,
+                "avm_status": avm_resp.status_code,
+                "avm_raw": avm_resp.json() if avm_resp.status_code == 200 else avm_resp.text,
+            }
+    result = asyncio.run(_fetch())
+    return jsonify(result)
+
+
 @app.route("/api/property/prefill")
 def property_prefill():
     """
