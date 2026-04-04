@@ -186,6 +186,7 @@ async def _fetch_rentcast_property(address, city, state, zip_code):
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             # Fetch property details and AVM in parallel
+            # /avm/value needs separate params (not full address string)
             prop_resp, avm_resp = await asyncio.gather(
                 client.get(
                     "{}/properties".format(RENTCAST_BASE),
@@ -194,7 +195,12 @@ async def _fetch_rentcast_property(address, city, state, zip_code):
                 ),
                 client.get(
                     "{}/avm/value".format(RENTCAST_BASE),
-                    params={"address": full_address},
+                    params={
+                        "address": address,
+                        "city":    city,
+                        "state":   state,
+                        "zipCode": zip_code,
+                    },
                     headers={"X-Api-Key": RENTCAST_KEY},
                 ),
             )
@@ -207,14 +213,16 @@ async def _fetch_rentcast_property(address, city, state, zip_code):
             avm_price = None
             if avm_resp.status_code == 200:
                 avm_data  = avm_resp.json()
-                avm_price = avm_data.get("price") or avm_data.get("value") or avm_data.get("priceRangeLow")
+                avm_price = (avm_data.get("price")
+                             or avm_data.get("value")
+                             or avm_data.get("priceRangeLow"))
 
             if not data and not avm_price:
                 return None
 
-            # Extract assessed value — RentCast nests it under assessments dict
+            # Extract assessed value — RentCast nests it under taxAssessments dict
             assessed = None
-            assessments = data.get("assessments") or {}
+            assessments = data.get("taxAssessments") or data.get("assessments") or {}
             if assessments:
                 # Get most recent year
                 latest = max(assessments.keys()) if assessments else None
@@ -263,7 +271,7 @@ def debug_rentcast():
                     params={"address": full_address},
                     headers={"X-Api-Key": RENTCAST_KEY}),
                 client.get("{}/avm/value".format(RENTCAST_BASE),
-                    params={"address": full_address},
+                    params={"address": address, "city": city, "state": state, "zipCode": zip_code},
                     headers={"X-Api-Key": RENTCAST_KEY}),
             )
             return {
@@ -452,8 +460,8 @@ async def _fetch_rentcast_assessed(address, city, state, zip_code):
                 data = resp.json()
                 if isinstance(data, list):
                     data = data[0] if data else {}
-                # Check nested assessments first
-                assessments = data.get("assessments") or {}
+                # Check nested taxAssessments first (RentCast field name)
+                assessments = data.get("taxAssessments") or data.get("assessments") or {}
                 val = None
                 if assessments:
                     latest = max(assessments.keys()) if assessments else None
