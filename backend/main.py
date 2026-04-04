@@ -44,8 +44,6 @@ _ALLOWED_ORIGINS = [
 CORS(app, origins=[o for o in _ALLOWED_ORIGINS if o])
 
 ATTOM_KEY     = os.getenv("ATTOM_API_KEY", "")
-RENTCAST_KEY  = os.getenv("RENTCAST_API_KEY", "")
-RENTCAST_BASE = "https://api.rentcast.io/v1"
 
 app.register_blueprint(property_bp)
 app.register_blueprint(comps_bp)
@@ -173,138 +171,28 @@ def auth_me():
     return jsonify(g.user if isinstance(g.user, dict) else _user_json(g.user))
 
 
-# ─── Property pre-fill via RentCast (replaces Zillow scraping) ───────────────
-
-async def _fetch_rentcast_property(address, city, state, zip_code):
-    """
-    Use RentCast /v1/properties + /v1/avm/value to get property details and AVM price.
-    Returns dict with avm_price, bedrooms, bathrooms, sqft, year_built, assessed_value or None.
-    """
-    if not RENTCAST_KEY:
-        return None
-    full_address = "{}, {}, {} {}".format(address, city, state, zip_code).strip(", ")
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            # Fetch property details and AVM in parallel
-            # /avm/value needs separate params (not full address string)
-            prop_resp, avm_resp = await asyncio.gather(
-                client.get(
-                    "{}/properties".format(RENTCAST_BASE),
-                    params={"address": full_address},
-                    headers={"X-Api-Key": RENTCAST_KEY},
-                ),
-                client.get(
-                    "{}/avm/value".format(RENTCAST_BASE),
-                    params={
-                        "address": address,
-                        "city":    city,
-                        "state":   state,
-                        "zipCode": zip_code,
-                    },
-                    headers={"X-Api-Key": RENTCAST_KEY},
-                ),
-            )
-
-            data = {}
-            if prop_resp.status_code == 200:
-                raw = prop_resp.json()
-                data = raw[0] if isinstance(raw, list) and raw else (raw if isinstance(raw, dict) else {})
-
-            avm_price = None
-            if avm_resp.status_code == 200:
-                avm_data  = avm_resp.json()
-                avm_price = (avm_data.get("price")
-                             or avm_data.get("value")
-                             or avm_data.get("priceRangeLow"))
-
-            if not data and not avm_price:
-                return None
-
-            # Extract assessed value — RentCast nests it under taxAssessments dict
-            assessed = None
-            assessments = data.get("taxAssessments") or data.get("assessments") or {}
-            if assessments:
-                # Get most recent year
-                latest = max(assessments.keys()) if assessments else None
-                if latest:
-                    assessed = (assessments[latest].get("value")
-                                or assessments[latest].get("totalValue"))
-            if not assessed:
-                assessed = (data.get("assessedValue")
-                            or data.get("taxAssessedValue")
-                            or data.get("taxAssessment"))
-
-            result = {
-                "bedrooms":       data.get("bedrooms"),
-                "bathrooms":      data.get("bathrooms"),
-                "sqft":           data.get("squareFootage") or data.get("livingArea"),
-                "year_built":     data.get("yearBuilt"),
-                "lot_size":       data.get("lotSize"),
-                "property_type":  data.get("propertyType", "Single Family"),
-                "assessed_value": assessed,
-                "lat":            data.get("latitude"),
-                "lon":            data.get("longitude"),
-            }
-            # AVM price from /avm/value takes priority; fall back to last sale
-            result["avm_price"] = (avm_price
-                                   or data.get("price")
-                                   or data.get("lastSalePrice"))
-            return {k: v for k, v in result.items() if v is not None}
-    except Exception:
-        pass
-    return None
-
-
-@app.route("/api/debug/rentcast")
-def debug_rentcast():
-    """Temporary debug endpoint — shows raw RentCast response."""
-    address  = request.args.get("address", "")
-    city     = request.args.get("city", "")
-    state    = request.args.get("state", "")
-    zip_code = request.args.get("zip_code", "")
-    full_address = "{}, {}, {} {}".format(address, city, state, zip_code).strip(", ")
-
-    async def _fetch():
-        async with httpx.AsyncClient(timeout=10) as client:
-            prop_resp, avm_resp = await asyncio.gather(
-                client.get("{}/properties".format(RENTCAST_BASE),
-                    params={"address": full_address},
-                    headers={"X-Api-Key": RENTCAST_KEY}),
-                client.get("{}/avm/value".format(RENTCAST_BASE),
-                    params={"address": address, "city": city, "state": state, "zipCode": zip_code},
-                    headers={"X-Api-Key": RENTCAST_KEY}),
-            )
-            return {
-                "full_address": full_address,
-                "properties_status": prop_resp.status_code,
-                "properties_raw": prop_resp.json() if prop_resp.status_code == 200 else prop_resp.text,
-                "avm_status": avm_resp.status_code,
-                "avm_raw": avm_resp.json() if avm_resp.status_code == 200 else avm_resp.text,
-            }
-    result = asyncio.run(_fetch())
-    return jsonify(result)
-
-
 @app.route("/api/property/prefill")
 def property_prefill():
-    """
-    Pre-fill property details for the search form.
-    Uses RentCast /v1/properties (licensed data, no scraping).
-    """
+    return jsonify({"found": False}), 200
+
+
+@app.route("/api/debug/attom")
+def debug_attom():
+    """Debug endpoint — shows raw ATTOM property/detail response."""
     address  = request.args.get("address", "")
     city     = request.args.get("city", "")
     state    = request.args.get("state", "")
     zip_code = request.args.get("zip_code", "")
-    if not address:
-        return jsonify({"found": False}), 200
-    try:
-        result = asyncio.run(_fetch_rentcast_property(address, city, state, zip_code))
-    except Exception:
-        result = None
-    if not result:
-        return jsonify({"found": False}), 200
-    result["found"] = True
-    return jsonify(result)
+    address2 = "{}, {} {}".format(city, state, zip_code).strip(", ")
+    async def _fetch():
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://api.gateway.attomdata.com/propertyapi/v1.0.0/property/detail",
+                params={"address1": address, "address2": address2},
+                headers={"apikey": ATTOM_KEY, "Accept": "application/json"},
+            )
+            return {"status": resp.status_code, "raw": resp.json() if resp.status_code == 200 else resp.text}
+    return jsonify(asyncio.run(_fetch()))
 
 
 # ─── Rent helpers ─────────────────────────────────────────────────────────────
@@ -316,35 +204,6 @@ def _heuristic_rent(zip_code, bedrooms):
     per_bed = {1: 0.8, 2: 1.0, 3: 1.25, 4: 1.5, 5: 1.8}
     mult = per_bed.get(int(bedrooms or 3), 1.25)
     return round(base * mult, -1)
-
-
-async def _fetch_rentcast_rent(address, city, state, zip_code, bedrooms, bathrooms):
-    """RentCast AVM rent estimate."""
-    if not RENTCAST_KEY:
-        return None
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                "{}/avm/rent/long-term".format(RENTCAST_BASE),
-                params={
-                    "address":      address,
-                    "city":         city,
-                    "state":        state,
-                    "zipCode":      zip_code,
-                    "propertyType": "Single Family",
-                    "bedrooms":     int(bedrooms or 3),
-                    "bathrooms":    float(bathrooms or 2.0),
-                },
-                headers={"X-Api-Key": RENTCAST_KEY},
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                rent = data.get("rent") or data.get("rentZestimate") or 0
-                if float(rent) > 0:
-                    return float(rent)
-    except Exception:
-        pass
-    return None
 
 
 async def _fetch_census_rent(zip_code, bedrooms):
@@ -420,17 +279,12 @@ async def _fetch_hud_fmr(zip_code, bedrooms):
 
 async def _fetch_rent(address, city, state, zip_code, bedrooms, bathrooms):
     """
-    Rent estimate chain (all licensed/official sources):
-      1. RentCast AVM           (licensed data, most accurate)
-      2. Census ACS median rent by bedroom (free govt, ZIP-level)
-      3. HUD Fair Market Rents  (free govt, county-level)
-      4. Heuristic fallback
+    Rent estimate chain (free/official sources):
+      1. Census ACS median rent by bedroom (free govt, ZIP-level)
+      2. HUD Fair Market Rents  (free govt, county-level)
+      3. Heuristic fallback
     Returns (rent_estimate, source_label)
     """
-    rent = await _fetch_rentcast_rent(address, city, state, zip_code, bedrooms, bathrooms)
-    if rent:
-        return rent, "RentCast AVM"
-
     rent = await _fetch_census_rent(zip_code, bedrooms)
     if rent:
         return rent, "U.S. Census ACS (median rent by ZIP)"
@@ -440,41 +294,6 @@ async def _fetch_rent(address, city, state, zip_code, bedrooms, bathrooms):
         return rent, "HUD Fair Market Rents"
 
     return _heuristic_rent(zip_code, bedrooms), "Estimated (heuristic)"
-
-
-# ─── Tax assessed value via RentCast /properties ─────────────────────────────
-
-async def _fetch_rentcast_assessed(address, city, state, zip_code):
-    """RentCast /v1/properties — returns county-record assessed value."""
-    if not RENTCAST_KEY:
-        return None
-    full_address = "{}, {}, {} {}".format(address, city, state, zip_code).strip(", ")
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                "{}/properties".format(RENTCAST_BASE),
-                params={"address": full_address},
-                headers={"X-Api-Key": RENTCAST_KEY},
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                if isinstance(data, list):
-                    data = data[0] if data else {}
-                # Check nested taxAssessments first (RentCast field name)
-                assessments = data.get("taxAssessments") or data.get("assessments") or {}
-                val = None
-                if assessments:
-                    latest = max(assessments.keys()) if assessments else None
-                    if latest:
-                        val = (assessments[latest].get("value")
-                               or assessments[latest].get("totalValue"))
-                if not val:
-                    val = data.get("assessedValue") or data.get("taxAssessedValue") or data.get("taxAssessment")
-                if val and float(val) > 0:
-                    return float(val)
-    except Exception:
-        pass
-    return None
 
 
 # ─── Main analyze endpoint ────────────────────────────────────────────────────
@@ -503,34 +322,11 @@ def analyze():
             get_neighborhood_sync(zip_code, asking or 0),
             get_trends_sync(state, asking or 300000),
             _fetch_rent(address, city, state, zip_code, bedrooms or 3, bathrooms or 2.0),
-            _fetch_rentcast_assessed(address, city, state, zip_code),
-            _fetch_rentcast_property(address, city, state, zip_code),
         )
 
-    prop, comps, neighborhood, trends, rent_result, rc_assessed, rc_prop = asyncio.run(_gather())
+    prop, comps, neighborhood, trends, rent_result = asyncio.run(_gather())
     monthly_rent, rent_source = rent_result if isinstance(rent_result, tuple) else (rent_result, "Unknown")
     dom_data = get_dom_sync(zip_code)
-
-    # ── Merge RentCast property data (fill gaps only) ──
-    if rc_prop:
-        if not prop.get("bedrooms") and rc_prop.get("bedrooms"):
-            prop["bedrooms"] = rc_prop["bedrooms"]
-        if not prop.get("bathrooms") and rc_prop.get("bathrooms"):
-            prop["bathrooms"] = rc_prop["bathrooms"]
-        if not prop.get("sqft") and rc_prop.get("sqft"):
-            prop["sqft"] = rc_prop["sqft"]
-        if not prop.get("year_built") and rc_prop.get("year_built"):
-            prop["year_built"] = rc_prop["year_built"]
-        if not prop.get("lat") and rc_prop.get("lat"):
-            prop["lat"] = rc_prop["lat"]
-            prop["lon"] = rc_prop["lon"]
-        # RentCast AVM price — only use if user didn't supply asking price
-        if not asking and rc_prop.get("avm_price"):
-            prop["asking_price"] = rc_prop["avm_price"]
-            prop["list_price"]   = rc_prop["avm_price"]
-            prop["is_mock"] = False
-        elif rc_prop.get("bedrooms"):
-            prop["is_mock"] = False
 
     # ── User-supplied fields always override everything ──
     if asking:    prop["asking_price"] = asking
@@ -545,11 +341,8 @@ def analyze():
     dom_zip_avg = float(dom_data.get("avg_dom", 30))
     ask_price   = prop.get("asking_price")
 
-    # ── Tax assessed value: RentCast → ATTOM → Census ACS estimate ──
-    if rc_assessed and rc_assessed > 0:
-        prop["tax_assessed_value"] = rc_assessed
-        prop["tax_source"] = "RentCast (county records)"
-    elif prop.get("tax_assessed_value") and not prop.get("is_mock"):
+    # ── Tax assessed value: ATTOM → Census ACS estimate ──
+    if prop.get("tax_assessed_value") and not prop.get("is_mock"):
         prop["tax_source"] = "ATTOM"
     else:
         eff_rate = neighborhood.get("effective_tax_rate")
@@ -642,9 +435,8 @@ def report():
 @app.route("/api/health")
 def health():
     return jsonify({
-        "status":              "ok",
-        "attom_configured":    bool(ATTOM_KEY),
-        "rentcast_configured": bool(RENTCAST_KEY),
+        "status":           "ok",
+        "attom_configured": bool(ATTOM_KEY),
     })
 
 
